@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -113,7 +114,8 @@ func (inst *Installer) Update(name string) error {
 
 // Remove deletes an installed tool's binary and state entry.
 func (inst *Installer) Remove(name string) error {
-	if _, ok := registry.Get(name); !ok {
+	tool, ok := registry.Get(name)
+	if !ok {
 		return fmt.Errorf("unknown tool: %s", name)
 	}
 
@@ -121,14 +123,18 @@ func (inst *Installer) Remove(name string) error {
 		return fmt.Errorf("%s is not installed", name)
 	}
 
-	bin := name
+	bin := tool.Binary
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
 	path := filepath.Join(inst.BinDir, bin)
 
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing binary: %w", err)
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "Warning: binary not found at %s\n", path)
+		} else {
+			return fmt.Errorf("removing binary: %w", err)
+		}
 	}
 
 	inst.State.Remove(name)
@@ -137,6 +143,12 @@ func (inst *Installer) Remove(name string) error {
 	}
 
 	fmt.Printf("Removed %s\n", name)
+
+	// Warn if the command is still reachable via another PATH entry.
+	if found, _ := exec.LookPath(bin); found != "" {
+		fmt.Fprintf(os.Stderr, "Warning: %s is still available at %s (not managed by brokit)\n", name, found)
+	}
+
 	return nil
 }
 
