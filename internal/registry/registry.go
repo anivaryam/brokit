@@ -11,6 +11,12 @@ type Tool struct {
 }
 
 var tools = map[string]Tool{
+	"env-vault": {
+		Name:        "env-vault",
+		Description: "Encrypted .env file manager powered by random-universe-cipher",
+		Repo:        "anivaryam/env-vault",
+		Binary:      "env-vault",
+	},
 	"merge-port": {
 		Name:        "merge-port",
 		Description: "Local reverse proxy that merges multiple ports into one",

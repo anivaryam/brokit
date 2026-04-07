@@ -6,6 +6,7 @@ A package manager for [anivaryam](https://github.com/anivaryam)'s dev tools. Ins
 
 | Tool | Description |
 |------|-------------|
+| [env-vault](https://github.com/anivaryam/env-vault) | Encrypted .env file manager powered by random-universe-cipher |
 | [tunnel](https://github.com/anivaryam/tunnel) | Expose local services through a public tunnel |
 | [merge-port](https://github.com/anivaryam/merge-port) | Local reverse proxy that merges multiple ports into one |
 | [proc-compose](https://github.com/anivaryam/proc-compose) | Process runner and manager with daemon support |
@@ -51,7 +52,7 @@ make install
 brokit install tunnel
 
 # Install multiple tools
-brokit install tunnel merge-port proc-compose
+brokit install tunnel merge-port proc-compose env-vault
 
 # Install all available tools
 brokit install --all
@@ -80,10 +81,11 @@ brokit list
 ```
 
 ```
-TOOL          DESCRIPTION                                              STATUS         VERSION
-merge-port    Local reverse proxy that merges multiple ports into one  installed      v0.2.1
-proc-compose  Process runner and manager with daemon support           not installed  -
-tunnel        Expose local services through a public tunnel            installed      v0.3.13
+TOOL          DESCRIPTION                                                STATUS         VERSION
+env-vault     Encrypted .env file manager powered by random-universe-c…  installed      v0.1.0
+merge-port    Local reverse proxy that merges multiple ports into one    installed      v0.2.1
+proc-compose  Process runner and manager with daemon support             not installed  -
+tunnel        Expose local services through a public tunnel              installed      v0.3.13
 ```
 
 ### Short aliases
