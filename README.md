@@ -69,6 +69,14 @@ brokit update tunnel
 brokit update --all
 ```
 
+### Force reinstall
+
+```sh
+brokit install --force tunnel
+```
+
+Reinstalls even if the tool is already installed. Useful when a binary is corrupted.
+
 ### Remove tools
 
 ```sh
@@ -87,6 +95,21 @@ env-vault     Encrypted .env file manager powered by random-universe-c…  insta
 merge-port    Local reverse proxy that merges multiple ports into one    installed      v0.2.1
 proc-compose  Process runner and manager with daemon support             not installed  -
 tunnel        Expose local services through a public tunnel              installed      v0.3.13
+```
+
+### Update brokit itself
+
+```sh
+brokit self-update
+```
+
+Downloads and replaces the running `brokit` binary with the latest release.
+
+### Verbose / quiet mode
+
+```sh
+brokit install -v tunnel    # verbose: shows download URLs and HTTP status
+brokit install -q --all     # quiet: only shows errors
 ```
 
 ### Short aliases
@@ -128,6 +151,14 @@ When you run `brokit install tunnel`, it:
 | State file | `~/.local/share/brokit/state.json` | `%LOCALAPPDATA%\brokit\state.json` |
 
 You can override the binary install directory with the `BROKIT_BIN` environment variable on any platform.
+
+### GitHub API rate limits
+
+Unauthenticated requests to the GitHub API are limited to 60 per hour. If you hit the rate limit, set the `GITHUB_TOKEN` environment variable to increase the limit to 5,000 requests per hour:
+
+```sh
+export GITHUB_TOKEN=ghp_your_token_here
+```
 
 ### Supported platforms
 

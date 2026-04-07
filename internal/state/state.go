@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -38,7 +39,7 @@ func Load(path string) (*State, error) {
 	return s, nil
 }
 
-// Save writes state to the given path, creating parent directories as needed.
+// Save writes state to the given path atomically, creating parent directories as needed.
 func (s *State) Save(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -47,7 +48,30 @@ func (s *State) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+
+	// Write to temp file then rename for atomicity.
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "state-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("writing temp state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("closing temp state: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("replacing state file: %w", err)
+	}
+	return nil
 }
 
 // Set records a tool as installed with the given version.

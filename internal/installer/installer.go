@@ -5,17 +5,30 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/anivaryam/brokit/internal/registry"
 	"github.com/anivaryam/brokit/internal/state"
+)
+
+// LogLevel controls output verbosity.
+type LogLevel int
+
+const (
+	LogQuiet   LogLevel = -1
+	LogNormal  LogLevel = 0
+	LogVerbose LogLevel = 1
 )
 
 // Installer manages tool installation, updates, and removal.
@@ -23,21 +36,40 @@ type Installer struct {
 	State     *state.State
 	statePath string
 	BinDir    string
+	LogLevel  LogLevel
 }
 
 type githubRelease struct {
 	TagName string `json:"tag_name"`
 }
 
+// HTTP clients with appropriate timeouts.
+var (
+	apiClient      = &http.Client{Timeout: 30 * time.Second}
+	downloadClient = &http.Client{Timeout: 5 * time.Minute}
+)
+
+// Base URLs — overridable in tests.
+var (
+	githubAPIBase = "https://api.github.com"
+	githubBase    = "https://github.com"
+)
+
 // New creates an Installer, loading existing state and ensuring the bin directory exists.
 func New() (*Installer, error) {
-	sp := stateFilePath()
+	sp, err := stateFilePath()
+	if err != nil {
+		return nil, fmt.Errorf("determining state path: %w", err)
+	}
 	s, err := state.Load(sp)
 	if err != nil {
 		return nil, fmt.Errorf("loading state: %w", err)
 	}
 
-	bd := defaultBinDir()
+	bd, err := defaultBinDir()
+	if err != nil {
+		return nil, fmt.Errorf("determining bin directory: %w", err)
+	}
 	if err := os.MkdirAll(bd, 0755); err != nil {
 		return nil, fmt.Errorf("creating bin directory: %w", err)
 	}
@@ -45,14 +77,30 @@ func New() (*Installer, error) {
 	return &Installer{State: s, statePath: sp, BinDir: bd}, nil
 }
 
+// ─── Logging helpers ─────────────────────────────────────────────────────────
+
+func (inst *Installer) log(format string, args ...any) {
+	if inst.LogLevel >= LogNormal {
+		fmt.Printf(format, args...)
+	}
+}
+
+func (inst *Installer) verbose(format string, args ...any) {
+	if inst.LogLevel >= LogVerbose {
+		fmt.Printf(format, args...)
+	}
+}
+
+// ─── Install / Update / Remove ───────────────────────────────────────────────
+
 // Install downloads and installs a tool.
-func (inst *Installer) Install(name string) error {
+func (inst *Installer) Install(name string, force bool) error {
 	tool, ok := registry.Get(name)
 	if !ok {
 		return fmt.Errorf("unknown tool: %s\navailable: %s", name, strings.Join(registry.Names(), ", "))
 	}
 
-	if existing, ok := inst.State.Get(name); ok {
+	if existing, ok := inst.State.Get(name); ok && !force {
 		return fmt.Errorf("%s is already installed (%s), use 'brokit update %s' to update", name, existing.Version, name)
 	}
 
@@ -61,7 +109,7 @@ func (inst *Installer) Install(name string) error {
 		return fmt.Errorf("fetching latest version: %w", err)
 	}
 
-	fmt.Printf("Installing %s %s...\n", name, version)
+	inst.log("Installing %s %s...\n", name, version)
 	if err := inst.downloadAndInstall(tool, version); err != nil {
 		return err
 	}
@@ -71,7 +119,7 @@ func (inst *Installer) Install(name string) error {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
-	fmt.Printf("Installed %s %s -> %s\n", name, version, inst.BinDir)
+	inst.log("Installed %s %s -> %s\n", name, version, inst.BinDir)
 	inst.warnIfNotInPath()
 	return nil
 }
@@ -94,11 +142,11 @@ func (inst *Installer) Update(name string) error {
 	}
 
 	if version == existing.Version {
-		fmt.Printf("%s is already up to date (%s)\n", name, version)
+		inst.log("%s is already up to date (%s)\n", name, version)
 		return nil
 	}
 
-	fmt.Printf("Updating %s %s -> %s...\n", name, existing.Version, version)
+	inst.log("Updating %s %s -> %s...\n", name, existing.Version, version)
 	if err := inst.downloadAndInstall(tool, version); err != nil {
 		return err
 	}
@@ -108,7 +156,38 @@ func (inst *Installer) Update(name string) error {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
-	fmt.Printf("Updated %s to %s\n", name, version)
+	inst.log("Updated %s to %s\n", name, version)
+	return nil
+}
+
+// UpdateTo updates a tool to a specific pre-fetched version (avoids re-fetching).
+func (inst *Installer) UpdateTo(name, version string) error {
+	tool, ok := registry.Get(name)
+	if !ok {
+		return fmt.Errorf("unknown tool: %s", name)
+	}
+
+	existing, installed := inst.State.Get(name)
+	if !installed {
+		return fmt.Errorf("%s is not installed", name)
+	}
+
+	if version == existing.Version {
+		inst.log("%s is already up to date (%s)\n", name, version)
+		return nil
+	}
+
+	inst.log("Updating %s %s -> %s...\n", name, existing.Version, version)
+	if err := inst.downloadAndInstall(tool, version); err != nil {
+		return err
+	}
+
+	inst.State.Set(name, version)
+	if err := inst.State.Save(inst.statePath); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+
+	inst.log("Updated %s to %s\n", name, version)
 	return nil
 }
 
@@ -142,13 +221,57 @@ func (inst *Installer) Remove(name string) error {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
-	fmt.Printf("Removed %s\n", name)
+	inst.log("Removed %s\n", name)
 
 	// Warn if the command is still reachable via another PATH entry.
 	if found, _ := exec.LookPath(bin); found != "" {
 		fmt.Fprintf(os.Stderr, "Warning: %s is still available at %s (not managed by brokit)\n", name, found)
 	}
 
+	return nil
+}
+
+// SelfUpdate updates brokit itself to the latest version.
+func (inst *Installer) SelfUpdate(currentVersion string) error {
+	repo := "anivaryam/brokit"
+	binary := "brokit"
+
+	version, err := latestVersion(repo)
+	if err != nil {
+		return fmt.Errorf("fetching latest version: %w", err)
+	}
+
+	if version == currentVersion {
+		inst.log("brokit is already up to date (%s)\n", version)
+		return nil
+	}
+
+	inst.log("Updating brokit %s -> %s...\n", currentVersion, version)
+
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding executable path: %w", err)
+	}
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return fmt.Errorf("resolving executable path: %w", err)
+	}
+
+	tool := registry.Tool{
+		Name:   "brokit",
+		Repo:   repo,
+		Binary: binary,
+	}
+
+	origBinDir := inst.BinDir
+	inst.BinDir = filepath.Dir(execPath)
+	defer func() { inst.BinDir = origBinDir }()
+
+	if err := inst.downloadAndInstall(tool, version); err != nil {
+		return err
+	}
+
+	inst.log("Updated brokit to %s\n", version)
 	return nil
 }
 
@@ -161,29 +284,51 @@ func (inst *Installer) InstalledNames() []string {
 	return names
 }
 
+// LatestVersion fetches the latest release version for the given repo.
+func LatestVersion(repo string) (string, error) {
+	return latestVersion(repo)
+}
+
+// ─── Internal helpers ────────────────────────────────────────────────────────
+
 func (inst *Installer) warnIfNotInPath() {
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		if filepath.Clean(dir) == filepath.Clean(inst.BinDir) {
 			return
 		}
 	}
-	fmt.Printf("\nWarning: %s is not in your PATH\n", inst.BinDir)
+	inst.log("\nWarning: %s is not in your PATH\n", inst.BinDir)
 	if runtime.GOOS == "windows" {
-		fmt.Printf("Run this in PowerShell to add it:\n")
-		fmt.Printf("  [Environment]::SetEnvironmentVariable(\"Path\", $env:Path + \";%s\", \"User\")\n", inst.BinDir)
+		inst.log("Run this in PowerShell to add it:\n")
+		inst.log("  [Environment]::SetEnvironmentVariable(\"Path\", $env:Path + \";%s\", \"User\")\n", inst.BinDir)
 	} else {
-		fmt.Printf("Add this to your shell profile:\n")
-		fmt.Printf("  export PATH=\"%s:$PATH\"\n", inst.BinDir)
+		inst.log("Add this to your shell profile:\n")
+		inst.log("  export PATH=\"%s:$PATH\"\n", inst.BinDir)
 	}
 }
 
 func latestVersion(repo string) (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
-	resp, err := http.Get(url)
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIBase, repo)
+
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := apiClient.Do(req)
+	if err != nil {
+		return "", wrapNetworkError(err)
+	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == 403 || resp.StatusCode == 429 {
+		return "", formatRateLimitError(resp)
+	}
 
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("GitHub API returned %d for %s", resp.StatusCode, repo)
@@ -199,6 +344,44 @@ func latestVersion(repo string) (string, error) {
 	return release.TagName, nil
 }
 
+func formatRateLimitError(resp *http.Response) error {
+	remaining := resp.Header.Get("X-RateLimit-Remaining")
+	resetStr := resp.Header.Get("X-RateLimit-Reset")
+
+	msg := "GitHub API rate limit exceeded"
+
+	if resetStr != "" {
+		if resetUnix, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
+			resetTime := time.Unix(resetUnix, 0)
+			wait := time.Until(resetTime).Round(time.Second)
+			if wait > 0 {
+				msg += fmt.Sprintf(" (resets in %s)", wait)
+			}
+		}
+	}
+
+	if remaining == "0" {
+		msg += "\nTip: set GITHUB_TOKEN to increase your rate limit to 5000 requests/hour"
+	}
+
+	return fmt.Errorf("%s", msg)
+}
+
+func wrapNetworkError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
+	if errors.As(err, &dnsErr) {
+		return fmt.Errorf("network error: cannot reach %s — check your internet connection", dnsErr.Name)
+	}
+	if errors.As(err, &opErr) {
+		return fmt.Errorf("network error: %s — check your internet connection", opErr.Op)
+	}
+	return err
+}
+
 func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) error {
 	osName := runtime.GOOS
 	arch := runtime.GOARCH
@@ -208,8 +391,10 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 		ext = "zip"
 	}
 
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s_%s_%s.%s",
-		tool.Repo, version, tool.Binary, osName, arch, ext)
+	url := fmt.Sprintf("%s/%s/releases/download/%s/%s_%s_%s.%s",
+		githubBase, tool.Repo, version, tool.Binary, osName, arch, ext)
+
+	inst.verbose("Download URL: %s\n", url)
 
 	tmpDir, err := os.MkdirTemp("", "brokit-*")
 	if err != nil {
@@ -220,9 +405,9 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 	archivePath := filepath.Join(tmpDir, fmt.Sprintf("archive.%s", ext))
 
 	// Download
-	resp, err := http.Get(url)
+	resp, err := downloadClient.Get(url)
 	if err != nil {
-		return fmt.Errorf("downloading: %w", err)
+		return wrapNetworkError(err)
 	}
 	defer resp.Body.Close()
 
@@ -230,15 +415,41 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 		return fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, url)
 	}
 
+	inst.verbose("HTTP %d, Content-Length: %d\n", resp.StatusCode, resp.ContentLength)
+
 	f, err := os.Create(archivePath)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+
+	// Wrap with progress writer for user feedback
+	var src io.Reader = resp.Body
+	if inst.LogLevel >= LogNormal {
+		src = &progressReader{
+			r:       resp.Body,
+			total:   resp.ContentLength,
+			name:    tool.Binary,
+			version: version,
+		}
+	}
+
+	written, err := io.Copy(f, src)
+	if err != nil {
 		f.Close()
 		return fmt.Errorf("saving download: %w", err)
 	}
 	f.Close()
+
+	// Clear progress line
+	if inst.LogLevel >= LogNormal {
+		fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 80))
+	}
+
+	// Validate download completeness
+	if resp.ContentLength > 0 && written != resp.ContentLength {
+		os.Remove(archivePath)
+		return fmt.Errorf("incomplete download: got %d bytes, expected %d", written, resp.ContentLength)
+	}
 
 	// Extract
 	binaryName := tool.Binary
@@ -256,7 +467,7 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 	}
 
 	// Install binary using atomic rename to handle "text file busy" on Linux
-	src := filepath.Join(tmpDir, binaryName)
+	srcPath := filepath.Join(tmpDir, binaryName)
 	dst := filepath.Join(inst.BinDir, binaryName)
 
 	tmpFile, err := os.CreateTemp(inst.BinDir, binaryName+".*.tmp")
@@ -265,7 +476,7 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 	}
 	tmpPath := tmpFile.Name()
 
-	srcFile, err := os.Open(src)
+	srcFile, err := os.Open(srcPath)
 	if err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
@@ -293,6 +504,47 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 
 	return nil
 }
+
+// ─── Progress ────────────────────────────────────────────────────────────────
+
+type progressReader struct {
+	r       io.Reader
+	read    int64
+	total   int64
+	name    string
+	version string
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	pr.read += int64(n)
+	if pr.total > 0 {
+		fmt.Fprintf(os.Stderr, "\rDownloading %s %s... %s / %s",
+			pr.name, pr.version,
+			formatBytes(pr.read), formatBytes(pr.total))
+	} else {
+		fmt.Fprintf(os.Stderr, "\rDownloading %s %s... %s",
+			pr.name, pr.version, formatBytes(pr.read))
+	}
+	return n, err
+}
+
+func formatBytes(b int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+	)
+	switch {
+	case b >= MB:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(MB))
+	case b >= KB:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
+// ─── Archive extraction ──────────────────────────────────────────────────────
 
 func extractTarGz(archive, destDir, target string) error {
 	f, err := os.Open(archive)

@@ -3,17 +3,26 @@
 package installer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
 
-func defaultBinDir() string {
+func defaultBinDir() (string, error) {
 	if dir := os.Getenv("BROKIT_BIN"); dir != "" {
-		return dir
+		return dir, nil
 	}
-	return filepath.Join(os.Getenv("HOME"), ".local", "bin")
+	home := os.Getenv("HOME")
+	if home == "" {
+		return "", fmt.Errorf("HOME environment variable is not set")
+	}
+	return filepath.Join(home, ".local", "bin"), nil
 }
 
-func stateFilePath() string {
-	return filepath.Join(os.Getenv("HOME"), ".local", "share", "brokit", "state.json")
+func stateFilePath() (string, error) {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return "", fmt.Errorf("HOME environment variable is not set")
+	}
+	return filepath.Join(home, ".local", "share", "brokit", "state.json"), nil
 }
