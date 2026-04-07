@@ -29,6 +29,12 @@ var tools = map[string]Tool{
 		Repo:        "anivaryam/proc-compose",
 		Binary:      "proc-compose",
 	},
+	"proxy-relay": {
+		Name:        "proxy-relay",
+		Description: "Authenticated SOCKS5/HTTP proxy client for routing traffic through a remote server",
+		Repo:        "anivaryam/proxy-relay",
+		Binary:      "proxy-relay",
+	},
 	"tunnel": {
 		Name:        "tunnel",
 		Description: "Expose local services through a public tunnel",

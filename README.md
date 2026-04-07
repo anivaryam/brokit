@@ -10,6 +10,7 @@ A package manager for [anivaryam](https://github.com/anivaryam)'s dev tools. Ins
 | [tunnel](https://github.com/anivaryam/tunnel) | Expose local services through a public tunnel |
 | [merge-port](https://github.com/anivaryam/merge-port) | Local reverse proxy that merges multiple ports into one |
 | [proc-compose](https://github.com/anivaryam/proc-compose) | Process runner and manager with daemon support |
+| [proxy-relay](https://github.com/anivaryam/proxy-relay) | Authenticated SOCKS5/HTTP proxy client for routing traffic through a remote server |
 
 ## Install
 
