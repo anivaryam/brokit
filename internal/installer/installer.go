@@ -243,16 +243,40 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 		return fmt.Errorf("extracting: %w", err)
 	}
 
-	// Install binary
+	// Install binary using atomic rename to handle "text file busy" on Linux
 	src := filepath.Join(tmpDir, binaryName)
 	dst := filepath.Join(inst.BinDir, binaryName)
 
-	data, err := os.ReadFile(src)
+	tmpFile, err := os.CreateTemp(inst.BinDir, binaryName+".*.tmp")
 	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	srcFile, err := os.Open(src)
+	if err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("reading extracted binary: %w", err)
 	}
-	if err := os.WriteFile(dst, data, 0755); err != nil {
+
+	if _, err := io.Copy(tmpFile, srcFile); err != nil {
+		srcFile.Close()
+		tmpFile.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("writing binary: %w", err)
+	}
+	srcFile.Close()
+	tmpFile.Close()
+
+	if err := os.Chmod(tmpPath, 0755); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("setting permissions: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, dst); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("installing binary: %w", err)
 	}
 
 	return nil
