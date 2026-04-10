@@ -5,14 +5,16 @@ $InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $env:L
 
 # Detect architecture
 $OSArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if (-not $OSArch) { $OSArch = $env:PROCESSOR_ARCHITECTURE }
 Write-Host "Detected OS architecture: $OSArch"
 $Arch = switch ($OSArch) {
     "X64"      { "amd64" }
+    "AMD64"    { "amd64" }
     "Arm64"    { "arm64" }
     "X86"      { "386" }
     "Arm"      { "arm" }
     "Arm32"    { "arm" }
-    default    { Write-Error "Unsupported architecture: $_"; exit 1 }
+    default    { Write-Error "Unsupported architecture: $OSArch"; exit 1 }
 }
 
 # Get latest version
