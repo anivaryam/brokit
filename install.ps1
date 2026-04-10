@@ -4,10 +4,15 @@ $Repo = "anivaryam/brokit"
 $InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "brokit\bin" }
 
 # Detect architecture
-$Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
-    "X64"   { "amd64" }
-    "Arm64" { "arm64" }
-    default { Write-Error "Unsupported architecture: $_"; exit 1 }
+$OSArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+Write-Host "Detected OS architecture: $OSArch"
+$Arch = switch ($OSArch) {
+    "X64"      { "amd64" }
+    "Arm64"    { "arm64" }
+    "X86"      { "386" }
+    "Arm"      { "arm" }
+    "Arm32"    { "arm" }
+    default    { Write-Error "Unsupported architecture: $_"; exit 1 }
 }
 
 # Get latest version
