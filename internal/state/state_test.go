@@ -5,19 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoad_MissingFile(t *testing.T) {
 	s, err := Load("/nonexistent/path/state.json")
-	if err != nil {
-		t.Fatalf("expected no error for missing file, got: %v", err)
-	}
-	if s.Installed == nil {
-		t.Fatal("Installed map should be non-nil")
-	}
-	if len(s.Installed) != 0 {
-		t.Errorf("expected empty Installed, got %d entries", len(s.Installed))
-	}
+	require.NoError(t, err, "expected no error for missing file")
+	assert.NotNil(t, s.Installed, "Installed map should be non-nil")
+	assert.Equal(t, 0, len(s.Installed), "expected empty Installed")
 }
 
 func TestLoad_ValidFile(t *testing.T) {
@@ -28,16 +25,10 @@ func TestLoad_ValidFile(t *testing.T) {
 	os.WriteFile(path, []byte(data), 0644)
 
 	s, err := Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err, "unexpected error")
 	tool, ok := s.Get("tunnel")
-	if !ok {
-		t.Fatal("expected tunnel to be installed")
-	}
-	if tool.Version != "v1.0.0" {
-		t.Errorf("version = %q, want %q", tool.Version, "v1.0.0")
-	}
+	assert.True(t, ok, "expected tunnel to be installed")
+	assert.Equal(t, "v1.0.0", tool.Version)
 }
 
 func TestLoad_CorruptJSON(t *testing.T) {
@@ -47,9 +38,7 @@ func TestLoad_CorruptJSON(t *testing.T) {
 	os.WriteFile(path, []byte("{not valid json"), 0644)
 
 	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected error for corrupt JSON, got nil")
-	}
+	require.Error(t, err, "expected error for corrupt JSON")
 }
 
 func TestLoad_NullInstalled(t *testing.T) {
@@ -59,12 +48,8 @@ func TestLoad_NullInstalled(t *testing.T) {
 	os.WriteFile(path, []byte(`{"installed":null}`), 0644)
 
 	s, err := Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if s.Installed == nil {
-		t.Fatal("Installed map should be non-nil even when JSON has null")
-	}
+	require.NoError(t, err, "unexpected error")
+	assert.NotNil(t, s.Installed, "Installed map should be non-nil even when JSON has null")
 }
 
 func TestSave_CreatesParentDirs(t *testing.T) {
@@ -74,23 +59,15 @@ func TestSave_CreatesParentDirs(t *testing.T) {
 	s := &State{Installed: make(map[string]InstalledTool)}
 	s.Set("tunnel", "v1.0.0")
 
-	if err := s.Save(path); err != nil {
-		t.Fatalf("Save failed: %v", err)
-	}
+	require.NoError(t, s.Save(path), "Save failed")
 
 	// Verify file exists and is valid JSON
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("cannot read saved file: %v", err)
-	}
+	require.NoError(t, err, "cannot read saved file")
 
 	var loaded State
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		t.Fatalf("saved file is not valid JSON: %v", err)
-	}
-	if loaded.Installed["tunnel"].Version != "v1.0.0" {
-		t.Errorf("loaded version = %q, want %q", loaded.Installed["tunnel"].Version, "v1.0.0")
-	}
+	require.NoError(t, json.Unmarshal(data, &loaded), "saved file is not valid JSON")
+	assert.Equal(t, "v1.0.0", loaded.Installed["tunnel"].Version)
 }
 
 func TestSave_AtomicWrite(t *testing.T) {
@@ -100,15 +77,11 @@ func TestSave_AtomicWrite(t *testing.T) {
 	// Write initial state
 	s := &State{Installed: make(map[string]InstalledTool)}
 	s.Set("tunnel", "v1.0.0")
-	if err := s.Save(path); err != nil {
-		t.Fatalf("first Save failed: %v", err)
-	}
+	require.NoError(t, s.Save(path), "first Save failed")
 
 	// Overwrite with new state
 	s.Set("merge-port", "v2.0.0")
-	if err := s.Save(path); err != nil {
-		t.Fatalf("second Save failed: %v", err)
-	}
+	require.NoError(t, s.Save(path), "second Save failed")
 
 	// Verify no temp files left behind
 	entries, _ := os.ReadDir(dir)
@@ -120,15 +93,11 @@ func TestSave_AtomicWrite(t *testing.T) {
 
 	// Verify content
 	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if _, ok := loaded.Get("tunnel"); !ok {
-		t.Error("tunnel should be in state")
-	}
-	if _, ok := loaded.Get("merge-port"); !ok {
-		t.Error("merge-port should be in state")
-	}
+	require.NoError(t, err, "Load failed")
+	_, ok := loaded.Get("tunnel")
+	assert.True(t, ok, "tunnel should be in state")
+	_, ok = loaded.Get("merge-port")
+	assert.True(t, ok, "merge-port should be state")
 }
 
 func TestSetGetRemove(t *testing.T) {
@@ -137,17 +106,11 @@ func TestSetGetRemove(t *testing.T) {
 	// Set
 	s.Set("tunnel", "v1.0.0")
 	tool, ok := s.Get("tunnel")
-	if !ok {
-		t.Fatal("expected tunnel after Set")
-	}
-	if tool.Version != "v1.0.0" {
-		t.Errorf("version = %q, want %q", tool.Version, "v1.0.0")
-	}
+	assert.True(t, ok, "expected tunnel after Set")
+	assert.Equal(t, "v1.0.0", tool.Version)
 
 	// Remove
 	s.Remove("tunnel")
 	_, ok = s.Get("tunnel")
-	if ok {
-		t.Fatal("expected tunnel to be gone after Remove")
-	}
+	assert.False(t, ok, "expected tunnel to be gone after Remove")
 }

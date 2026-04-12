@@ -1,74 +1,61 @@
 package registry
 
-import "sort"
+import (
+	"sort"
+	"sync"
+)
 
-// Tool describes a tool available in the registry.
-type Tool struct {
-	Name        string
-	Description string
-	Repo        string // GitHub "owner/repo"
-	Binary      string // binary name without extension
-}
+var (
+	toolsCache []Tool
+	toolsOnce  sync.Once
+)
 
-var tools = map[string]Tool{
-	"env-vault": {
-		Name:        "env-vault",
-		Description: "Encrypted .env file manager powered by random-universe-cipher",
-		Repo:        "anivaryam/env-vault",
-		Binary:      "env-vault",
-	},
-	"merge-port": {
-		Name:        "merge-port",
-		Description: "Local reverse proxy that merges multiple ports into one",
-		Repo:        "anivaryam/merge-port",
-		Binary:      "merge-port",
-	},
-	"proc-compose": {
-		Name:        "proc-compose",
-		Description: "Process runner and manager with daemon support",
-		Repo:        "anivaryam/proc-compose",
-		Binary:      "proc-compose",
-	},
-	"proxy-relay": {
-		Name:        "proxy-relay",
-		Description: "Authenticated SOCKS5/HTTP proxy client for routing traffic through a remote server",
-		Repo:        "anivaryam/proxy-relay",
-		Binary:      "proxy-relay",
-	},
-	"tunnel": {
-		Name:        "tunnel",
-		Description: "Expose local services through a public tunnel",
-		Repo:        "anivaryam/tunnel",
-		Binary:      "tunnel",
-	},
+func getTools() []Tool {
+	toolsOnce.Do(func() {
+		// Load from default config path (empty string uses defaults)
+		toolsCache, _ = Load("")
+	})
+	return toolsCache
 }
 
 // Get returns a tool by name.
 func Get(name string) (Tool, bool) {
-	t, ok := tools[name]
-	return t, ok
+	tools := getTools()
+	for _, t := range tools {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return Tool{}, false
 }
 
 // All returns all registered tools sorted by name.
 func All() []Tool {
-	names := make([]string, 0, len(tools))
-	for name := range tools {
-		names = append(names, name)
+	tools := getTools()
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
 	}
 	sort.Strings(names)
 
 	result := make([]Tool, len(names))
 	for i, name := range names {
-		result[i] = tools[name]
+		for _, t := range tools {
+			if t.Name == name {
+				result[i] = t
+				break
+			}
+		}
 	}
 	return result
 }
 
 // Names returns all tool names sorted.
 func Names() []string {
-	names := make([]string, 0, len(tools))
-	for name := range tools {
-		names = append(names, name)
+	tools := getTools()
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
 	}
 	sort.Strings(names)
 	return names

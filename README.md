@@ -152,6 +152,17 @@ When you run `brokit install tunnel`, it:
 
 You can override the binary install directory with the `BROKIT_BIN` environment variable on any platform.
 
+### Configuration
+
+brokit supports optional TOML configuration for custom tools. Create `~/.config/brokit/tools.toml`:
+
+```toml
+[[tools]]
+name = "my-tool"
+repo = "username/my-tool"
+description = "My custom tool"
+```
+
 ### GitHub API rate limits
 
 Unauthenticated requests to the GitHub API are limited to 60 per hour. If you hit the rate limit, set the `GITHUB_TOKEN` environment variable to increase the limit to 5,000 requests per hour:
@@ -159,6 +170,17 @@ Unauthenticated requests to the GitHub API are limited to 60 per hour. If you hi
 ```sh
 export GITHUB_TOKEN=ghp_your_token_here
 ```
+
+### Architecture
+
+brokit is organized into modular packages:
+
+| Package | Purpose |
+|---------|---------|
+| `downloader` | Fetches tool archives from GitHub Releases |
+| `extractor` | Extracts archives (`.tar.gz`, `.zip`) |
+| `registry` | Built-in tool registry and custom tool config |
+| `state` | Tracks installed tools and versions |
 
 ### Supported platforms
 
