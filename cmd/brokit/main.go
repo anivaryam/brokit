@@ -301,7 +301,7 @@ func listCmd() *cobra.Command {
 			for _, tool := range registry.All() {
 				status := "not installed"
 				ver := "-"
-				if t, ok := inst.State.Get(tool.Name); ok {
+				if t, ok := inst.GetTool(tool.Name); ok {
 					status = "installed"
 					ver = t.Version
 				}

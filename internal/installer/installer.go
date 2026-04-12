@@ -259,6 +259,11 @@ func (inst *Installer) InstalledNames() []string {
 	return names
 }
 
+// GetTool returns the installed tool info and whether it exists.
+func (inst *Installer) GetTool(name string) (state.InstalledTool, bool) {
+	return inst.state.Get(name)
+}
+
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 func (inst *Installer) warnIfNotInPath() {
