@@ -18,6 +18,7 @@ type StateManager interface {
 	Set(t state.InstalledTool) error
 	Remove(name string) error
 	List() []state.InstalledTool
+	Save(path string) error
 }
 
 // VersionFetcher defines the interface for fetching the latest version of a tool.

@@ -108,6 +108,10 @@ func (s *stateAdapter) List() []state.InstalledTool {
 	return list
 }
 
+func (s *stateAdapter) Save(path string) error {
+	return s.State.Save(path)
+}
+
 func stateFilePath() (string, error) {
 	_configDir, err := os.UserConfigDir()
 	if err != nil {
