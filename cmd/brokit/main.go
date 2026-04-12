@@ -62,6 +62,7 @@ func newInstaller(cmd *cobra.Command) (*installer.Installer, *downloader.Downloa
 	st := &stateAdapter{State: s, statePath: sp}
 
 	inst := installer.NewInstaller(reg, st, dl)
+	inst.StatePath = sp
 
 	if quiet {
 		inst.LogLevel = installer.LogQuiet

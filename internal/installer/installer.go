@@ -33,7 +33,7 @@ type Installer struct {
 	state     StateManager
 	fetcher   VersionFetcher
 	State     *state.State
-	statePath string
+	StatePath string
 	BinDir    string
 	LogLevel  LogLevel
 }
@@ -87,7 +87,7 @@ func (inst *Installer) Install(name string, force bool) error {
 	}
 
 	inst.state.Set(state.InstalledTool{Name: name, Version: version})
-	if err := inst.state.Save(inst.statePath); err != nil {
+	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
@@ -124,7 +124,7 @@ func (inst *Installer) Update(name string) error {
 	}
 
 	inst.state.Set(state.InstalledTool{Name: name, Version: version})
-	if err := inst.state.Save(inst.statePath); err != nil {
+	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
@@ -155,7 +155,7 @@ func (inst *Installer) UpdateTo(name, version string) error {
 	}
 
 	inst.state.Set(state.InstalledTool{Name: name, Version: version})
-	if err := inst.state.Save(inst.statePath); err != nil {
+	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
@@ -191,7 +191,7 @@ func (inst *Installer) Remove(name string) error {
 	}
 
 	inst.state.Remove(name)
-	if err := inst.state.Save(inst.statePath); err != nil {
+	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
