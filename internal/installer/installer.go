@@ -1,10 +1,6 @@
 package installer
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"compress/gzip"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,10 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/anivaryam/brokit/internal/extractor"
 	"github.com/anivaryam/brokit/internal/registry"
 	"github.com/anivaryam/brokit/internal/state"
 )
@@ -33,48 +29,24 @@ const (
 
 // Installer manages tool installation, updates, and removal.
 type Installer struct {
+	registry  Registry
+	state     StateManager
+	fetcher   VersionFetcher
 	State     *state.State
 	statePath string
 	BinDir    string
 	LogLevel  LogLevel
 }
 
-type githubRelease struct {
-	TagName string `json:"tag_name"`
-}
-
-// HTTP clients with appropriate timeouts.
-var (
-	apiClient      = &http.Client{Timeout: 30 * time.Second}
-	downloadClient = &http.Client{Timeout: 5 * time.Minute}
-)
-
-// Base URLs — overridable in tests.
-var (
-	githubAPIBase = "https://api.github.com"
-	githubBase    = "https://github.com"
-)
-
-// New creates an Installer, loading existing state and ensuring the bin directory exists.
-func New() (*Installer, error) {
-	sp, err := stateFilePath()
-	if err != nil {
-		return nil, fmt.Errorf("determining state path: %w", err)
+// NewInstaller creates an Installer with the given dependencies.
+func NewInstaller(registry Registry, state StateManager, fetcher VersionFetcher) *Installer {
+	bd, _ := defaultBinDir()
+	return &Installer{
+		registry: registry,
+		state:    state,
+		fetcher:  fetcher,
+		BinDir:   bd,
 	}
-	s, err := state.Load(sp)
-	if err != nil {
-		return nil, fmt.Errorf("loading state: %w", err)
-	}
-
-	bd, err := defaultBinDir()
-	if err != nil {
-		return nil, fmt.Errorf("determining bin directory: %w", err)
-	}
-	if err := os.MkdirAll(bd, 0755); err != nil {
-		return nil, fmt.Errorf("creating bin directory: %w", err)
-	}
-
-	return &Installer{State: s, statePath: sp, BinDir: bd}, nil
 }
 
 // ─── Logging helpers ─────────────────────────────────────────────────────────
@@ -95,16 +67,16 @@ func (inst *Installer) verbose(format string, args ...any) {
 
 // Install downloads and installs a tool.
 func (inst *Installer) Install(name string, force bool) error {
-	tool, ok := registry.Get(name)
+	tool, ok := inst.registry.Get(name)
 	if !ok {
-		return fmt.Errorf("unknown tool: %s\navailable: %s", name, strings.Join(registry.Names(), ", "))
+		return fmt.Errorf("unknown tool: %s\navailable: %s", name, strings.Join(inst.registry.Names(), ", "))
 	}
 
-	if existing, ok := inst.State.Get(name); ok && !force {
+	if existing, ok := inst.state.Get(name); ok && !force {
 		return fmt.Errorf("%s is already installed (%s), use 'brokit update %s' to update", name, existing.Version, name)
 	}
 
-	version, err := latestVersion(tool.Repo)
+	version, err := inst.fetcher.Latest(tool.Repo)
 	if err != nil {
 		return fmt.Errorf("fetching latest version: %w", err)
 	}
@@ -114,7 +86,7 @@ func (inst *Installer) Install(name string, force bool) error {
 		return err
 	}
 
-	inst.State.Set(name, version)
+	inst.state.Set(state.InstalledTool{Name: name, Version: version})
 	if err := inst.State.Save(inst.statePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -126,17 +98,17 @@ func (inst *Installer) Install(name string, force bool) error {
 
 // Update fetches the latest version and reinstalls if newer.
 func (inst *Installer) Update(name string) error {
-	tool, ok := registry.Get(name)
+	tool, ok := inst.registry.Get(name)
 	if !ok {
 		return fmt.Errorf("unknown tool: %s", name)
 	}
 
-	existing, installed := inst.State.Get(name)
+	existing, installed := inst.state.Get(name)
 	if !installed {
 		return fmt.Errorf("%s is not installed, use 'brokit install %s' first", name, name)
 	}
 
-	version, err := latestVersion(tool.Repo)
+	version, err := inst.fetcher.Latest(tool.Repo)
 	if err != nil {
 		return fmt.Errorf("fetching latest version: %w", err)
 	}
@@ -151,7 +123,7 @@ func (inst *Installer) Update(name string) error {
 		return err
 	}
 
-	inst.State.Set(name, version)
+	inst.state.Set(state.InstalledTool{Name: name, Version: version})
 	if err := inst.State.Save(inst.statePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -162,12 +134,12 @@ func (inst *Installer) Update(name string) error {
 
 // UpdateTo updates a tool to a specific pre-fetched version (avoids re-fetching).
 func (inst *Installer) UpdateTo(name, version string) error {
-	tool, ok := registry.Get(name)
+	tool, ok := inst.registry.Get(name)
 	if !ok {
 		return fmt.Errorf("unknown tool: %s", name)
 	}
 
-	existing, installed := inst.State.Get(name)
+	existing, installed := inst.state.Get(name)
 	if !installed {
 		return fmt.Errorf("%s is not installed", name)
 	}
@@ -182,7 +154,7 @@ func (inst *Installer) UpdateTo(name, version string) error {
 		return err
 	}
 
-	inst.State.Set(name, version)
+	inst.state.Set(state.InstalledTool{Name: name, Version: version})
 	if err := inst.State.Save(inst.statePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -191,14 +163,17 @@ func (inst *Installer) UpdateTo(name, version string) error {
 	return nil
 }
 
+// ErrBinaryNotFound is returned when the binary file does not exist.
+var ErrBinaryNotFound = errors.New("binary not found")
+
 // Remove deletes an installed tool's binary and state entry.
 func (inst *Installer) Remove(name string) error {
-	tool, ok := registry.Get(name)
+	tool, ok := inst.registry.Get(name)
 	if !ok {
 		return fmt.Errorf("unknown tool: %s", name)
 	}
 
-	if _, ok := inst.State.Get(name); !ok {
+	if _, ok := inst.state.Get(name); !ok {
 		return fmt.Errorf("%s is not installed", name)
 	}
 
@@ -210,13 +185,12 @@ func (inst *Installer) Remove(name string) error {
 
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "Warning: binary not found at %s\n", path)
-		} else {
-			return fmt.Errorf("removing binary: %w", err)
+			return fmt.Errorf("%w: %s", ErrBinaryNotFound, path)
 		}
+		return fmt.Errorf("removing binary: %w", err)
 	}
 
-	inst.State.Remove(name)
+	inst.state.Remove(name)
 	if err := inst.State.Save(inst.statePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -236,7 +210,7 @@ func (inst *Installer) SelfUpdate(currentVersion string) error {
 	repo := "anivaryam/brokit"
 	binary := "brokit"
 
-	version, err := latestVersion(repo)
+	version, err := inst.fetcher.Latest(repo)
 	if err != nil {
 		return fmt.Errorf("fetching latest version: %w", err)
 	}
@@ -277,16 +251,12 @@ func (inst *Installer) SelfUpdate(currentVersion string) error {
 
 // InstalledNames returns names of all installed tools.
 func (inst *Installer) InstalledNames() []string {
-	names := make([]string, 0, len(inst.State.Installed))
-	for name := range inst.State.Installed {
-		names = append(names, name)
+	installed := inst.state.List()
+	names := make([]string, 0, len(installed))
+	for _, tool := range installed {
+		names = append(names, tool.Name)
 	}
 	return names
-}
-
-// LatestVersion fetches the latest release version for the given repo.
-func LatestVersion(repo string) (string, error) {
-	return latestVersion(repo)
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -307,66 +277,6 @@ func (inst *Installer) warnIfNotInPath() {
 	}
 }
 
-func latestVersion(repo string) (string, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIBase, repo)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	resp, err := apiClient.Do(req)
-	if err != nil {
-		return "", wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 403 || resp.StatusCode == 429 {
-		return "", formatRateLimitError(resp)
-	}
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("GitHub API returned %d for %s", resp.StatusCode, repo)
-	}
-
-	var release githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
-	}
-	if release.TagName == "" {
-		return "", fmt.Errorf("no releases found for %s", repo)
-	}
-	return release.TagName, nil
-}
-
-func formatRateLimitError(resp *http.Response) error {
-	remaining := resp.Header.Get("X-RateLimit-Remaining")
-	resetStr := resp.Header.Get("X-RateLimit-Reset")
-
-	msg := "GitHub API rate limit exceeded"
-
-	if resetStr != "" {
-		if resetUnix, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
-			resetTime := time.Unix(resetUnix, 0)
-			wait := time.Until(resetTime).Round(time.Second)
-			if wait > 0 {
-				msg += fmt.Sprintf(" (resets in %s)", wait)
-			}
-		}
-	}
-
-	if remaining == "0" {
-		msg += "\nTip: set GITHUB_TOKEN to increase your rate limit to 5000 requests/hour"
-	}
-
-	return fmt.Errorf("%s", msg)
-}
-
 func wrapNetworkError(err error) error {
 	if err == nil {
 		return nil
@@ -383,6 +293,9 @@ func wrapNetworkError(err error) error {
 }
 
 func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) error {
+	githubBase := "https://github.com"
+	downloadClient := &http.Client{Timeout: 5 * time.Minute}
+
 	osName := runtime.GOOS
 	arch := runtime.GOARCH
 
@@ -457,17 +370,17 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 		binaryName += ".exe"
 	}
 
+	var srcPath string
 	if ext == "zip" {
-		err = extractZip(archivePath, tmpDir, binaryName)
+		srcPath, err = extractor.ExtractZip(tmpDir, archivePath, binaryName)
 	} else {
-		err = extractTarGz(archivePath, tmpDir, binaryName)
+		srcPath, err = extractor.ExtractTarGz(tmpDir, archivePath, binaryName)
 	}
 	if err != nil {
 		return fmt.Errorf("extracting: %w", err)
 	}
 
 	// Install binary using atomic rename to handle "text file busy" on Linux
-	srcPath := filepath.Join(tmpDir, binaryName)
 	dst := filepath.Join(inst.BinDir, binaryName)
 
 	tmpFile, err := os.CreateTemp(inst.BinDir, binaryName+".*.tmp")
@@ -542,74 +455,4 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
-}
-
-// ─── Archive extraction ──────────────────────────────────────────────────────
-
-func extractTarGz(archive, destDir, target string) error {
-	f, err := os.Open(archive)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-
-		if filepath.Base(hdr.Name) == target && hdr.Typeflag == tar.TypeReg {
-			out, err := os.Create(filepath.Join(destDir, target))
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
-				return err
-			}
-			return out.Close()
-		}
-	}
-	return fmt.Errorf("binary %s not found in archive", target)
-}
-
-func extractZip(archive, destDir, target string) error {
-	r, err := zip.OpenReader(archive)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-
-	for _, f := range r.File {
-		if filepath.Base(f.Name) == target {
-			rc, err := f.Open()
-			if err != nil {
-				return err
-			}
-			out, err := os.Create(filepath.Join(destDir, target))
-			if err != nil {
-				rc.Close()
-				return err
-			}
-			if _, err := io.Copy(out, rc); err != nil {
-				out.Close()
-				rc.Close()
-				return err
-			}
-			rc.Close()
-			return out.Close()
-		}
-	}
-	return fmt.Errorf("binary %s not found in archive", target)
 }

@@ -3,12 +3,15 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"text/tabwriter"
 
+	"github.com/anivaryam/brokit/internal/downloader"
 	"github.com/anivaryam/brokit/internal/installer"
 	"github.com/anivaryam/brokit/internal/registry"
+	"github.com/anivaryam/brokit/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -38,19 +41,79 @@ func main() {
 	}
 }
 
-func newInstaller(cmd *cobra.Command) (*installer.Installer, error) {
-	inst, err := installer.New()
-	if err != nil {
-		return nil, err
-	}
+func newInstaller(cmd *cobra.Command) (*installer.Installer, *downloader.Downloader, error) {
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	quiet, _ := cmd.Flags().GetBool("quiet")
+
+	sp, err := stateFilePath()
+	if err != nil {
+		return nil, nil, err
+	}
+	s, err := state.Load(sp)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	const userAgent = "brokit"
+	dlClient := downloader.NewClient(userAgent)
+	dl := downloader.NewDownloader(dlClient, userAgent)
+
+	reg := &registryAdapter{}
+	st := &stateAdapter{State: s, statePath: sp}
+
+	inst := installer.NewInstaller(reg, st, dl)
+
 	if quiet {
 		inst.LogLevel = installer.LogQuiet
 	} else if verbose {
 		inst.LogLevel = installer.LogVerbose
 	}
-	return inst, nil
+	return inst, dl, nil
+}
+
+type registryAdapter struct{}
+
+func (r *registryAdapter) Get(name string) (registry.Tool, bool) {
+	return registry.Get(name)
+}
+
+func (r *registryAdapter) All() []registry.Tool {
+	return registry.All()
+}
+
+func (r *registryAdapter) Names() []string {
+	return registry.Names()
+}
+
+type stateAdapter struct {
+	*state.State
+	statePath string
+}
+
+func (s *stateAdapter) Set(t state.InstalledTool) error {
+	s.State.Set(t.Name, t.Version)
+	return nil
+}
+
+func (s *stateAdapter) Remove(name string) error {
+	s.State.Remove(name)
+	return nil
+}
+
+func (s *stateAdapter) List() []state.InstalledTool {
+	list := make([]state.InstalledTool, 0, len(s.State.Installed))
+	for _, t := range s.State.Installed {
+		list = append(list, t)
+	}
+	return list
+}
+
+func stateFilePath() (string, error) {
+	_configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(_configDir, "brokit", "state.json"), nil
 }
 
 func installCmd() *cobra.Command {
@@ -68,7 +131,7 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			all, _ := cmd.Flags().GetBool("all")
 			force, _ := cmd.Flags().GetBool("force")
-			inst, err := newInstaller(cmd)
+			inst, _, err := newInstaller(cmd)
 			if err != nil {
 				return err
 			}
@@ -121,7 +184,7 @@ Examples:
   brokit update --all`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			all, _ := cmd.Flags().GetBool("all")
-			inst, err := newInstaller(cmd)
+			inst, dl, err := newInstaller(cmd)
 			if err != nil {
 				return err
 			}
@@ -132,7 +195,7 @@ Examples:
 					fmt.Println("No tools installed")
 					return nil
 				}
-				return parallelUpdate(inst, names)
+				return parallelUpdate(inst, dl, names)
 			}
 
 			if len(args) == 0 {
@@ -156,7 +219,7 @@ Examples:
 }
 
 // parallelUpdate fetches all versions concurrently, then applies updates sequentially.
-func parallelUpdate(inst *installer.Installer, names []string) error {
+func parallelUpdate(inst *installer.Installer, dl *downloader.Downloader, names []string) error {
 	type result struct {
 		name    string
 		version string
@@ -174,7 +237,7 @@ func parallelUpdate(inst *installer.Installer, names []string) error {
 				results[idx] = result{name: n, err: fmt.Errorf("unknown tool: %s", n)}
 				return
 			}
-			ver, err := installer.LatestVersion(tool.Repo)
+			ver, err := dl.Latest(tool.Repo)
 			results[idx] = result{name: n, version: ver, err: err}
 		}(i, name)
 	}
@@ -203,7 +266,7 @@ func removeCmd() *cobra.Command {
 		Short:   "Remove installed tools",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			inst, err := newInstaller(cmd)
+			inst, _, err := newInstaller(cmd)
 			if err != nil {
 				return err
 			}
@@ -228,7 +291,7 @@ func listCmd() *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List available tools and their install status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			inst, err := newInstaller(cmd)
+			inst, _, err := newInstaller(cmd)
 			if err != nil {
 				return err
 			}
@@ -256,7 +319,7 @@ func selfUpdateCmd() *cobra.Command {
 		Short: "Update brokit itself to the latest version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			inst, err := newInstaller(cmd)
+			inst, _, err := newInstaller(cmd)
 			if err != nil {
 				return err
 			}
