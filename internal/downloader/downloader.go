@@ -2,15 +2,14 @@ package downloader
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	brokiterrors "github.com/anivaryam/brokit/internal/errors"
 	"github.com/anivaryam/brokit/internal/installer"
 )
 
@@ -44,7 +43,7 @@ func (d *Downloader) Latest(repo string) (string, error) {
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return "", wrapNetworkError(err)
+		return "", brokiterrors.WrapNetworkError(err)
 	}
 	defer resp.Body.Close()
 
@@ -108,19 +107,4 @@ func formatRateLimitError(resp *http.Response) error {
 	}
 
 	return fmt.Errorf("%s", msg)
-}
-
-func wrapNetworkError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var dnsErr *net.DNSError
-	var opErr *net.OpError
-	if errors.As(err, &dnsErr) {
-		return fmt.Errorf("network error: cannot reach %s — check your internet connection", dnsErr.Name)
-	}
-	if errors.As(err, &opErr) {
-		return fmt.Errorf("network error: %s — check your internet connection", opErr.Op)
-	}
-	return err
 }

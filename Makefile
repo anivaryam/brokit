@@ -14,4 +14,7 @@ clean:
 test:
 	go test ./... -race -count=1 -coverprofile=coverage.out -covermode=atomic
 
-.PHONY: build install clean test
+lint:
+	golangci-lint run
+
+.PHONY: build install clean test lint

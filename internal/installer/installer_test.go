@@ -4,38 +4,20 @@ import (
 	"os"
 	"testing"
 
-	"github.com/anivaryam/brokit/internal/registry"
-	"github.com/anivaryam/brokit/internal/state"
+	brokiterrors "github.com/anivaryam/brokit/internal/errors"
 	"github.com/stretchr/testify/assert"
 )
-
-type mockRegistry struct{}
-
-func (m mockRegistry) Get(name string) (registry.Tool, bool) { return registry.Get(name) }
-func (m mockRegistry) All() []registry.Tool                  { return registry.All() }
-func (m mockRegistry) Names() []string                       { return registry.Names() }
-
-type mockState struct{}
-
-func (m mockState) Get(name string) (state.InstalledTool, bool) { return state.InstalledTool{}, false }
-func (m mockState) Set(t state.InstalledTool) error             { return nil }
-func (m mockState) Remove(name string) error                    { return nil }
-func (m mockState) List() []state.InstalledTool                 { return nil }
-
-type mockFetcher struct{}
-
-func (m mockFetcher) Latest(repo string) (string, error) { return "v1.0.0", nil }
 
 // ─── Network errors ──────────────────────────────────────────────────────────
 
 func TestWrapNetworkError_Nil(t *testing.T) {
-	err := wrapNetworkError(nil)
+	err := brokiterrors.WrapNetworkError(nil)
 	assert.NoError(t, err)
 }
 
 func TestWrapNetworkError_NonNetworkError(t *testing.T) {
 	original := os.ErrNotExist
-	wrapped := wrapNetworkError(original)
+	wrapped := brokiterrors.WrapNetworkError(original)
 	assert.Equal(t, original, wrapped)
 }
 

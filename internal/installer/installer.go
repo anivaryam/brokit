@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anivaryam/brokit/internal/checksum"
+	brokiterrors "github.com/anivaryam/brokit/internal/errors"
 	"github.com/anivaryam/brokit/internal/extractor"
 	"github.com/anivaryam/brokit/internal/registry"
 	"github.com/anivaryam/brokit/internal/state"
@@ -86,7 +87,9 @@ func (inst *Installer) Install(name string, force bool) error {
 		return err
 	}
 
-	inst.state.Set(state.InstalledTool{Name: name, Version: version})
+	if err := inst.state.Set(state.InstalledTool{Name: name, Version: version}); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
 	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -123,7 +126,9 @@ func (inst *Installer) Update(name string) error {
 		return err
 	}
 
-	inst.state.Set(state.InstalledTool{Name: name, Version: version})
+	if err := inst.state.Set(state.InstalledTool{Name: name, Version: version}); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
 	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -154,7 +159,9 @@ func (inst *Installer) UpdateTo(name, version string) error {
 		return err
 	}
 
-	inst.state.Set(state.InstalledTool{Name: name, Version: version})
+	if err := inst.state.Set(state.InstalledTool{Name: name, Version: version}); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
 	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -190,7 +197,9 @@ func (inst *Installer) Remove(name string) error {
 		return fmt.Errorf("removing binary: %w", err)
 	}
 
-	inst.state.Remove(name)
+	if err := inst.state.Remove(name); err != nil {
+		return fmt.Errorf("removing from state: %w", err)
+	}
 	if err := inst.state.Save(inst.StatePath); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
@@ -282,21 +291,6 @@ func (inst *Installer) warnIfNotInPath() {
 	}
 }
 
-func wrapNetworkError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var dnsErr *net.DNSError
-	var opErr *net.OpError
-	if errors.As(err, &dnsErr) {
-		return fmt.Errorf("network error: cannot reach %s — check your internet connection", dnsErr.Name)
-	}
-	if errors.As(err, &opErr) {
-		return fmt.Errorf("network error: %s — check your internet connection", opErr.Op)
-	}
-	return err
-}
-
 func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) error {
 	githubBase := "https://github.com"
 	downloadClient := &http.Client{Timeout: 5 * time.Minute}
@@ -322,51 +316,12 @@ func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) er
 
 	archivePath := filepath.Join(tmpDir, fmt.Sprintf("archive.%s", ext))
 
-	// Download
-	resp, err := downloadClient.Get(url)
-	if err != nil {
-		return wrapNetworkError(err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, url)
-	}
-
-	inst.verbose("HTTP %d, Content-Length: %d\n", resp.StatusCode, resp.ContentLength)
-
-	f, err := os.Create(archivePath)
-	if err != nil {
+	if err := inst.downloadFile(downloadClient, url, archivePath, tool.Binary, version); err != nil {
 		return err
 	}
 
-	// Wrap with progress writer for user feedback
-	var src io.Reader = resp.Body
-	if inst.LogLevel >= LogNormal {
-		src = &progressReader{
-			r:       resp.Body,
-			total:   resp.ContentLength,
-			name:    tool.Binary,
-			version: version,
-		}
-	}
-
-	written, err := io.Copy(f, src)
-	if err != nil {
-		f.Close()
-		return fmt.Errorf("saving download: %w", err)
-	}
-	f.Close()
-
-	// Clear progress line
-	if inst.LogLevel >= LogNormal {
-		fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 80))
-	}
-
-	// Validate download completeness
-	if resp.ContentLength > 0 && written != resp.ContentLength {
-		os.Remove(archivePath)
-		return fmt.Errorf("incomplete download: got %d bytes, expected %d", written, resp.ContentLength)
+	if err := inst.verifyChecksum(archivePath, tool.Binary, version); err != nil {
+		return err
 	}
 
 	// Extract
@@ -460,4 +415,79 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+func (inst *Installer) downloadFile(client *http.Client, url, dest, name, version string) error {
+	resp, err := client.Get(url)
+	if err != nil {
+		return brokiterrors.WrapNetworkError(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download failed: HTTP %d (%s)", resp.StatusCode, url)
+	}
+
+	inst.verbose("HTTP %d, Content-Length: %d\n", resp.StatusCode, resp.ContentLength)
+
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+
+	var src io.Reader = resp.Body
+	if inst.LogLevel >= LogNormal {
+		src = &progressReader{
+			r:       resp.Body,
+			total:   resp.ContentLength,
+			name:    name,
+			version: version,
+		}
+	}
+
+	written, err := io.Copy(f, src)
+	if err != nil {
+		f.Close()
+		return fmt.Errorf("saving download: %w", err)
+	}
+	f.Close()
+
+	if inst.LogLevel >= LogNormal {
+		fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 80))
+	}
+
+	if resp.ContentLength > 0 && written != resp.ContentLength {
+		os.Remove(dest)
+		return fmt.Errorf("incomplete download: got %d bytes, expected %d", written, resp.ContentLength)
+	}
+
+	return nil
+}
+
+func (inst *Installer) verifyChecksum(archivePath, binaryName, version string) error {
+	checksumsURL := fmt.Sprintf("https://github.com/anivaryam/brokit/releases/download/%s/checksums.txt", version)
+	checksumFile := filepath.Join(filepath.Dir(archivePath), "checksums.txt")
+
+	if err := inst.downloadFile(&http.Client{Timeout: 30 * time.Second}, checksumsURL, checksumFile, "checksums", version); err != nil {
+		inst.verbose("Checksum file not available, skipping verification\n")
+		return nil
+	}
+
+	expectedHash, err := checksum.SHA256FromHexFile(checksumFile, fmt.Sprintf("%s_%s_%s.tar.gz", binaryName, runtime.GOOS, runtime.GOARCH))
+	if err != nil {
+		inst.verbose("Could not find checksum for %s, skipping verification\n", binaryName)
+		return nil
+	}
+
+	actualHash, err := checksum.SHA256(archivePath)
+	if err != nil {
+		return fmt.Errorf("computing checksum: %w", err)
+	}
+
+	if actualHash != expectedHash {
+		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", binaryName, expectedHash, actualHash)
+	}
+
+	inst.verbose("Checksum verified: %s\n", binaryName)
+	return nil
 }

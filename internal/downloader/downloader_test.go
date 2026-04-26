@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	brokiterrors "github.com/anivaryam/brokit/internal/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -128,13 +129,13 @@ func TestVersionExists_NotFound(t *testing.T) {
 }
 
 func TestWrapNetworkError_Nil(t *testing.T) {
-	err := wrapNetworkError(nil)
+	err := brokiterrors.WrapNetworkError(nil)
 	assert.NoError(t, err)
 }
 
 func TestWrapNetworkError_NonNetworkError(t *testing.T) {
 	original := os.ErrNotExist
-	wrapped := wrapNetworkError(original)
+	wrapped := brokiterrors.WrapNetworkError(original)
 	assert.Equal(t, original, wrapped)
 }
 

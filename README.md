@@ -36,7 +36,7 @@ This installs to `%LOCALAPPDATA%\brokit\bin` and automatically adds it to your P
 
 ### From Source
 
-Requires [Go](https://go.dev/dl/) 1.22+.
+Requires [Go](https://go.dev/dl/) 1.23+.
 
 ```sh
 git clone https://github.com/anivaryam/brokit.git
@@ -116,12 +116,13 @@ brokit install -q --all     # quiet: only shows errors
 
 Every command has a short alias for convenience:
 
-| Command   | Alias           |
-|-----------|-----------------|
-| `install` | `i`             |
-| `update`  | `u`, `up`       |
-| `remove`  | `rm`, `uninstall` |
-| `list`    | `ls`            |
+| Command    | Alias              |
+|------------|--------------------|
+| `install`  | `i`                |
+| `update`   | `u`, `up`          |
+| `remove`   | `rm`, `uninstall`  |
+| `list`     | `ls`               |
+| `self-update` | —               |
 
 ```sh
 brokit i tunnel          # install
@@ -160,6 +161,7 @@ brokit supports optional TOML configuration for custom tools. Create `~/.config/
 [[tools]]
 name = "my-tool"
 repo = "username/my-tool"
+binary = "my-tool"
 description = "My custom tool"
 ```
 
@@ -171,6 +173,8 @@ Unauthenticated requests to the GitHub API are limited to 60 per hour. If you hi
 export GITHUB_TOKEN=ghp_your_token_here
 ```
 
+> **Security note**: Never commit your `GITHUB_TOKEN` to version control. Add it to your shell profile or use a secrets manager.
+
 ### Architecture
 
 brokit is organized into modular packages:
@@ -179,6 +183,7 @@ brokit is organized into modular packages:
 |---------|---------|
 | `downloader` | Fetches tool archives from GitHub Releases |
 | `extractor` | Extracts archives (`.tar.gz`, `.zip`) |
+| `installer` | Installs, updates, and removes tools |
 | `registry` | Built-in tool registry and custom tool config |
 | `state` | Tracks installed tools and versions |
 
@@ -189,6 +194,44 @@ brokit is organized into modular packages:
 | Linux | amd64, arm64 |
 | macOS | amd64 (Intel), arm64 (Apple Silicon) |
 | Windows | amd64 |
+
+### Troubleshooting
+
+**Installation fails with "text file busy"**
+
+This happens when trying to overwrite a running binary. Either stop the running process or use:
+```sh
+brokit install --force <tool>
+```
+
+**Tool not found after install**
+
+Make sure the install directory is in your PATH:
+```sh
+# Linux/macOS
+export PATH="$HOME/.local/bin:$PATH"
+
+# Windows (PowerShell)
+$env:Path = "$env:Path;C:\Users\<you>\AppData\Local\brokit\bin"
+```
+
+**GitHub API rate limit exceeded**
+
+Set the `GITHUB_TOKEN` environment variable:
+```sh
+export GITHUB_TOKEN=ghp_your_token_here
+```
+
+**Verbose output for debugging**
+
+Use the `-v` flag to see detailed download and installation info:
+```sh
+brokit install -v tunnel
+```
+
+## Contributing
+
+Contributions are welcome! Please open an issue or pull request on [GitHub](https://github.com/anivaryam/brokit).
 
 ## License
 
