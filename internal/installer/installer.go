@@ -250,6 +250,10 @@ func (inst *Installer) SelfUpdate(currentVersion string) error {
 	inst.BinDir = filepath.Dir(execPath)
 	defer func() { inst.BinDir = origBinDir }()
 
+	if !isWritable(inst.BinDir) {
+		return fmt.Errorf("permission denied: cannot write to %s (try running with sudo)", inst.BinDir)
+	}
+
 	if err := inst.downloadAndInstall(tool, version); err != nil {
 		return err
 	}
@@ -289,6 +293,15 @@ func (inst *Installer) warnIfNotInPath() {
 		inst.log("Add this to your shell profile:\n")
 		inst.log("  export PATH=\"%s:$PATH\"\n", inst.BinDir)
 	}
+}
+
+func isWritable(dir string) bool {
+	f, err := os.CreateTemp(dir, ".write-test-*")
+	if err != nil {
+		return false
+	}
+	os.Remove(f.Name())
+	return true
 }
 
 func (inst *Installer) downloadAndInstall(tool registry.Tool, version string) error {
