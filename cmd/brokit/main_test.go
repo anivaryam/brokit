@@ -1,14 +1,43 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var testBinPath string
+
+func TestMain(m *testing.M) {
+	tmpDir, err := os.MkdirTemp("", "brokit-test-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create temp dir: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	bin := "brokit"
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	testBinPath = filepath.Join(tmpDir, bin)
+
+	build := exec.Command("go", "build", "-o", testBinPath, ".")
+	build.Stderr = os.Stderr
+	build.Stdout = os.Stderr
+	if err := build.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to build test binary: %v\n", err)
+		os.Exit(1)
+	}
+
+	os.Exit(m.Run())
+}
 
 func TestCLI_HelpFlag(t *testing.T) {
 	out, err := execCLI("--help")
@@ -102,11 +131,7 @@ func TestCLI_UnknownCommand(t *testing.T) {
 }
 
 func execCLI(args ...string) (string, error) {
-	binPath := filepath.Join(os.Getenv("PWD"), "bin", "brokit")
-	if _, err := os.Stat(binPath); os.IsNotExist(err) {
-		binPath = "brokit"
-	}
-	cmd := exec.Command(binPath, args...)
+	cmd := exec.Command(testBinPath, args...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
